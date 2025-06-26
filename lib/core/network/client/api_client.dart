@@ -1,3 +1,5 @@
+import 'dart:developer';
+
 import 'package:dio/dio.dart';
 
 class ApiClient {
@@ -7,6 +9,7 @@ class ApiClient {
     try {
       return await _dio.get(path);
     } on DioException catch (e) {
+      log(e.toString());
       throw Exception("API GET Error: ${e.message}");
     }
   }

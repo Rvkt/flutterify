@@ -18,15 +18,15 @@ class ProductCard extends StatelessWidget {
         leading: ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: Image.network(
-            product.image,
+            product.images![0],
             width: 60,
             height: 60,
             fit: BoxFit.cover,
             errorBuilder: (context, error, stackTrace) => const Icon(Icons.broken_image),
           ),
         ),
-        title: Text(product.title, style: const TextStyle(fontWeight: FontWeight.w600)),
-        subtitle: Text('₹${product.price.toStringAsFixed(2)}'),
+        title: Text(product.title!, style: const TextStyle(fontWeight: FontWeight.w600)),
+        subtitle: Text('₹${product.price!.toStringAsFixed(2)}'),
       ),
     );
   }
