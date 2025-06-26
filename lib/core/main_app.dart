@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutterify/core/theme/app_theme.dart';
 
-import '../features/products/presentation/screens/products_screen.dart';
+import '../features/services_screen.dart';
 
 class MainApp extends StatelessWidget {
   const MainApp({super.key});
@@ -13,7 +13,7 @@ class MainApp extends StatelessWidget {
       title: 'Flutter Demo',
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
-      home: ProductsScreen(),
+      home: ServicesScreen(),
     );
   }
 }
