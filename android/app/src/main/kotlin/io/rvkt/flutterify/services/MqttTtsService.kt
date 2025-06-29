@@ -1,73 +1,89 @@
 package io.rvkt.flutterify.services
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.Service
-import android.content.Intent
-import android.os.Build
-import android.os.IBinder
-import android.speech.tts.TextToSpeech
+import android.app.*
+import android.content.*
+import android.graphics.BitmapFactory
+import android.media.AudioManager
+import android.os.*
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import io.rvkt.flutterify.R
+import io.rvkt.flutterify.MainActivity
+import io.rvkt.flutterify.utils.TtsSpeaker
 import org.eclipse.paho.client.mqttv3.*
-import java.util.*
+import org.json.JSONObject
+import java.security.SecureRandom
+import java.security.cert.X509Certificate
 import java.util.concurrent.Executors
 import javax.net.ssl.*
 
-import java.security.SecureRandom
-import java.security.cert.X509Certificate
-import javax.net.ssl.SSLContext
-import javax.net.ssl.SSLSocketFactory
-import javax.net.ssl.TrustManager
-import javax.net.ssl.X509TrustManager
-
-
-class MqttTtsService : Service(), TextToSpeech.OnInitListener {
+class MqttTtsService : Service() {
 
     private lateinit var mqttClient: MqttClient
-    private var tts: TextToSpeech? = null
+    private lateinit var ttsSpeaker: TtsSpeaker
     private val executor = Executors.newSingleThreadExecutor()
 
     // HiveMQ Cloud credentials
     private val serverUri = "ssl://367d365ff9c7477988364a43816f637d.s1.eu.hivemq.cloud:8883"
     private val username = "coderkamlesh"
     private val password = "Coder@mqtt3kamlesh#"
-    private val defaultTopic = "test/flutter"
+    private val defaultTopic = "flashmart"
+
+    // Binder to allow MainActivity to call public methods
+    private val binder = LocalBinder()
+
+    inner class LocalBinder : Binder() {
+        fun getService(): MqttTtsService = this@MqttTtsService
+    }
+
+    override fun onBind(intent: Intent?): IBinder {
+        return binder
+    }
 
     override fun onCreate() {
         super.onCreate()
         startForegroundService()
-        tts = TextToSpeech(this, this)
+        ttsSpeaker = TtsSpeaker(this, languageCode = getLanguage())
         setupMqttClient()
     }
 
-    /**
-     * Starts the service as a foreground service with a persistent notification
-     */
     private fun startForegroundService() {
-        val channelId = "mqtt_service_channel"
+        val channelId = "background_service_channel"
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 channelId,
-                "MQTT TTS Service Channel",
-                NotificationManager.IMPORTANCE_DEFAULT
-            )
-            getSystemService(NotificationManager::class.java)
-                .createNotificationChannel(channel)
+                "Default",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Keeps your app updated in the background."
+                setShowBadge(false)
+            }
+
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            notificationManager.createNotificationChannel(channel)
         }
 
-        val notification: Notification = NotificationCompat.Builder(this, channelId)
-            .setContentTitle("MQTT Service Running")
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+        val notificationIntent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            notificationIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("Staying Connected")
+            .setContentText("Your app is receiving updates in real time.")
+            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
             .build()
 
         startForeground(1, notification)
     }
 
-    /**
-     * Setup and connect the MQTT client to the broker with SSL and custom trust manager.
-     */
     private fun setupMqttClient() {
         executor.execute {
             try {
@@ -75,15 +91,13 @@ class MqttTtsService : Service(), TextToSpeech.OnInitListener {
                 mqttClient = MqttClient(serverUri, clientId, null)
 
                 val options = MqttConnectOptions().apply {
-                    isCleanSession = true
+                    isCleanSession = false
                     userName = username
                     keepAliveInterval = 60
                     password = this@MqttTtsService.password.toCharArray()
                     isAutomaticReconnect = true
                     socketFactory = getUnsafeSSLSocketFactory()
                 }
-
-
 
                 mqttClient.setCallback(object : MqttCallback {
                     override fun connectionLost(cause: Throwable?) {
@@ -92,8 +106,22 @@ class MqttTtsService : Service(), TextToSpeech.OnInitListener {
 
                     override fun messageArrived(topic: String?, message: MqttMessage?) {
                         val msg = message.toString()
+
+                        val json = JSONObject(msg)
+                        val map = mutableMapOf<String, String>()
+                        json.keys().forEach { key -> map[key] = json.getString(key) }
+
+                        val audioManager = getSystemService(AUDIO_SERVICE) as AudioManager
+                        audioManager.setStreamVolume(
+                            AudioManager.STREAM_MUSIC,
+                            audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC),
+                            0
+                        )
+
                         Log.d("MQTT", "Message received: $msg")
-                        tts?.speak(msg, TextToSpeech.QUEUE_FLUSH, null, null)
+                        val body = map["body"] ?: "You have received a new update."
+                        ttsSpeaker.speak(body)
+                        showLocalNotification(map)
                     }
 
                     override fun deliveryComplete(token: IMqttDeliveryToken?) {}
@@ -109,9 +137,6 @@ class MqttTtsService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
-    /**
-     * Subscribe to a topic (default or custom).
-     */
     fun subscribeToTopic(topic: String, qos: Int = 1) {
         executor.execute {
             try {
@@ -127,22 +152,63 @@ class MqttTtsService : Service(), TextToSpeech.OnInitListener {
         }
     }
 
-    /**
-     * Creates an "unsafe" SSL Socket Factory that trusts all certificates.
-     * ⚠️ Use only for development. DO NOT use in production!
-     */
+    private fun showLocalNotification(message: Map<String, String>) {
+        val channelId = "mqtt_message_channel"
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                channelId,
+                "Orders",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Shows real-time information about new orders"
+                enableLights(true)
+                enableVibration(true)
+            }
+
+            val manager = getSystemService(NotificationManager::class.java)
+            manager.createNotificationChannel(channel)
+        }
+
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val notificationId = System.currentTimeMillis().toInt()
+        val bigPicture = BitmapFactory.decodeResource(resources, R.drawable.bg)
+        val title = message["title"] ?: "New Order"
+        val body = message["body"] ?: "You have received a new update."
+
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle(title)
+            .setContentText(body)
+            .setStyle(
+                NotificationCompat.BigPictureStyle()
+                    .bigPicture(bigPicture)
+                    .setSummaryText(body)
+            )
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .build()
+
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.notify(notificationId, notification)
+    }
+
     private fun getUnsafeSSLSocketFactory(): SSLSocketFactory {
         val trustAllCerts = arrayOf<TrustManager>(object : X509TrustManager {
-            override fun checkClientTrusted(
-                chain: Array<X509Certificate>, authType: String
-            ) {
-            }
-
-            override fun checkServerTrusted(
-                chain: Array<X509Certificate>, authType: String
-            ) {
-            }
-
+            override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {}
+            override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {}
             override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
         })
 
@@ -151,30 +217,10 @@ class MqttTtsService : Service(), TextToSpeech.OnInitListener {
         return sslContext.socketFactory
     }
 
-    /**
-     * Initialize TTS engine.
-     */
-    override fun onInit(status: Int) {
-        if (status == TextToSpeech.SUCCESS) {
-            val result = tts?.setLanguage(Locale.US)
-            if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                Log.e("TTS", "Language not supported")
-            }
-        } else {
-            Log.e("TTS", "TTS Init failed")
-            val installIntent = Intent()
-            installIntent.action = TextToSpeech.Engine.ACTION_INSTALL_TTS_DATA
-            installIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            startActivity(installIntent)
-        }
+    private fun getLanguage(): String {
+        return "hi" // or "en", "bn", etc.
     }
-    
 
-    override fun onBind(intent: Intent?): IBinder? = null
-
-    /**
-     * Cleanup when service is destroyed.
-     */
     override fun onDestroy() {
         executor.execute {
             try {
@@ -183,8 +229,8 @@ class MqttTtsService : Service(), TextToSpeech.OnInitListener {
                 Log.e("MQTT", "Disconnect failed: ${e.message}")
             }
         }
-        tts?.stop()
-        tts?.shutdown()
+        ttsSpeaker.stop()
+        ttsSpeaker.shutdown()
         super.onDestroy()
     }
 }
